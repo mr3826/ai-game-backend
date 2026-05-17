@@ -82,14 +82,58 @@ def exchange_code_for_token(code: str, timeout: int = 10) -> Dict[str, Optional[
     return data
 
 
-def upload_tiktok_video(video_url: str, caption: str, hashtags: list | None = None) -> dict:
-    """Placeholder TikTok upload adapter.
+import os
+import json
+import shutil
+import uuid
+from datetime import datetime
+from typing import Optional, List
 
-    Implement OAuth, chunked upload and token refresh in production.
+
+def upload_tiktok_video(video_url: str, caption: str, hashtags: Optional[List[str]] = None, dry_run: bool = True) -> dict:
+    """Upload a video to TikTok (dry-run by default).
+
+    - `dry_run=True` writes metadata into `artifacts/tiktok_dry_run/` and returns a simulated file URL.
+    - Real upload implementation is TODO and must be gated behind secure secrets and rate-limiting.
     """
-    return {"status": "ok", "platform": "tiktok", "video_url": video_url}
+    if dry_run:
+        artifacts_dir = os.path.abspath(os.getenv("LOCAL_ARTIFACTS_DIR", "artifacts"))
+        tiktok_dir = os.path.join(artifacts_dir, "tiktok_dry_run")
+        os.makedirs(tiktok_dir, exist_ok=True)
+
+        meta = {
+            "video_url": video_url,
+            "caption": caption,
+            "hashtags": hashtags or [],
+            "created_at": datetime.utcnow().isoformat() + "Z",
+        }
+        meta_filename = f"{uuid.uuid4().hex}.json"
+        meta_path = os.path.join(tiktok_dir, meta_filename)
+        with open(meta_path, "w", encoding="utf-8") as fh:
+            json.dump(meta, fh, ensure_ascii=False, indent=2)
+
+        # Copy local file if path points to a local file
+        returned_url = video_url
+        try:
+            src = None
+            if video_url and video_url.startswith("file://"):
+                src = video_url[len("file://"):]
+            elif video_url and os.path.exists(video_url):
+                src = video_url
+            if src:
+                dest_video = os.path.join(tiktok_dir, os.path.basename(src))
+                shutil.copy2(src, dest_video)
+                returned_url = f"file://{os.path.abspath(dest_video)}"
+        except Exception:
+            # ignore copy failures for dry-run
+            pass
+
+        return {"status": "dry-run", "platform": "tiktok", "video_url": returned_url, "meta_path": f"file://{os.path.abspath(meta_path)}"}
+
+    # Real upload path: not implemented yet
+    return {"status": "not-implemented", "platform": "tiktok"}
 
 
-def upload_to_tiktok(video_url: str, caption: str, hashtags: list | None = None) -> dict:
+def upload_to_tiktok(video_url: str, caption: str, hashtags: Optional[List[str]] = None, dry_run: bool = True) -> dict:
     """Compatibility wrapper used by unit tests and higher-level code."""
-    return upload_tiktok_video(video_url, caption, hashtags)
+    return upload_tiktok_video(video_url, caption, hashtags, dry_run=dry_run)
