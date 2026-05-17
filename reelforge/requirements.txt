@@ -1,0 +1,15 @@
+fastapi==0.100.0
+uvicorn==0.22.0
+celery[redis]==5.3.1
+redis==4.5.5
+sqlalchemy==2.0.18
+psycopg2-binary==2.9.7
+pydantic==2.1.1
+httpx==0.24.1
+boto3==1.28.0
+ffmpeg-python==0.2.0
+python-dotenv==1.0.0
+structlog==23.1.0
+prometheus-client==0.15.0
+pytest==7.3.1
+importlib-metadata<6
