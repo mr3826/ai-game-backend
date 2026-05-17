@@ -22,6 +22,11 @@ try:
     import google.generativeai as _gemini  # type: ignore
 except Exception:
     _gemini = None
+    
+try:
+    import httpx  # type: ignore
+except Exception:
+    httpx = None
 
 
 class LLMConnector:
@@ -39,6 +44,10 @@ class LLMConnector:
 
         # Auto-detect when provider not explicitly set
         if not self.provider:
+            # Prioritize Wan AI (Alibaba) when configured
+            if os.getenv("WANAI_API_KEY") or os.getenv("WAN_AI_API_KEY") or os.getenv("ALIBABA_WANAI_API_KEY"):
+                self.provider = "wanai"
+            # then OpenAI and Gemini as before
             if os.getenv("OPENAI_API_KEY") and self.openai is not None:
                 self.provider = "openai"
             elif (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")) and self.gemini is not None:
@@ -72,6 +81,17 @@ class LLMConnector:
                 return self._call_gemini(prompt, temperature, max_tokens)
             except Exception as exc:
                 return f"gemini_error: {str(exc)}"
+
+        if self.provider in ("wanai", "wan", "alibaba"):
+            # Wan AI (Alibaba) via an env-driven HTTP endpoint. Requires
+            # WANAI_API_URL and WANAI_API_KEY (or WAN_AI_API_URL/WAN_AI_API_KEY).
+            # If not present, fall back to stub.
+            if not (os.getenv("WANAI_API_KEY") or os.getenv("WAN_AI_API_KEY") or os.getenv("ALIBABA_WANAI_API_KEY")):
+                return self._stub_response(prompt)
+            try:
+                return self._call_wanai(prompt, temperature, max_tokens)
+            except Exception as exc:
+                return f"wanai_error: {str(exc)}"
 
         # fallback stub
         return self._stub_response(prompt)
@@ -130,6 +150,54 @@ class LLMConnector:
             return str(out)
 
         raise RuntimeError("gemini SDK not available")
+
+
+    def _call_wanai(self, prompt: str, temperature: float, max_tokens: int) -> str:
+        """Call Wan AI (Alibaba) via a generic HTTP API endpoint.
+
+        This implementation is intentionally generic: set `WANAI_API_URL`
+        and `WANAI_API_KEY` (or `WAN_AI_API_URL` / `WAN_AI_API_KEY`) in the
+        environment. The connector sends a POST with JSON {prompt,...}
+        and attempts to extract a textual result from common response shapes.
+        """
+        if httpx is None:
+            raise RuntimeError("httpx is required for WAN AI HTTP calls")
+
+        url = os.getenv("WANAI_API_URL") or os.getenv("WAN_AI_API_URL") or os.getenv("ALIBABA_WANAI_API_URL")
+        api_key = os.getenv("WANAI_API_KEY") or os.getenv("WAN_AI_API_KEY") or os.getenv("ALIBABA_WANAI_API_KEY")
+        if not url or not api_key:
+            raise RuntimeError("WAN AI endpoint or API key not configured")
+
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        payload = {"prompt": prompt, "temperature": temperature, "max_tokens": max_tokens}
+
+        # Allow model selection via env
+        model = os.getenv("WANAI_MODEL")
+        if model:
+            payload["model"] = model
+
+        with httpx.Client(timeout=60) as client:
+            resp = client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+        # Attempt to extract text from common response shapes
+        if isinstance(data, dict):
+            # common pattern: {'output': ['text', ...]}
+            if "output" in data and isinstance(data["output"], list) and data["output"]:
+                return data["output"][0]
+            if "result" in data:
+                r = data["result"]
+                if isinstance(r, str):
+                    return r
+                if isinstance(r, list) and r:
+                    return r[0]
+            if "text" in data and isinstance(data["text"], str):
+                return data["text"]
+            # fallback: stringify
+            return str(data)
+
+        return str(data)
 
     def _stub_response(self, prompt: str) -> str:
         """A minimal, local fallback used when no provider is available."""
